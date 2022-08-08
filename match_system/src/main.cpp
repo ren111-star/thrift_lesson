@@ -2,10 +2,13 @@
 // You should copy it to another filename to avoid overwriting it.
 
 #include "match_server/Match.h"
+#include "save_client/Save.h"
 #include <thrift/protocol/TBinaryProtocol.h>
 #include <thrift/server/TSimpleServer.h>
 #include <thrift/transport/TServerSocket.h>
 #include <thrift/transport/TBufferTransports.h>
+#include <thrift/transport/TTransportUtils.h>
+#include <thrift/transport/TSocket.h>
 
 #include <thread>  // 开启多线程的库
 #include <iostream>
@@ -18,8 +21,8 @@ using namespace ::apache::thrift;
 using namespace ::apache::thrift::protocol;
 using namespace ::apache::thrift::transport;
 using namespace ::apache::thrift::server;
-
-using namespace  ::match_service;
+using namespace ::save_service;
+using namespace ::match_service;
 
 struct Task {
     User user;
@@ -27,15 +30,30 @@ struct Task {
 };
 
 struct MessageQueue {
-  queue<Task> q;
-  mutex m;
-  condition_variable cv;
+    queue<Task> q;
+    mutex m;
+    condition_variable cv;
 }message_queue;
 
 class Poll {
     public:
         void save_result(int a, int b) {
             printf("Match Result : %d %d\n", a, b);
+
+            std::shared_ptr<TTransport> socket(new TSocket("123.57.47.211", 9090));
+            std::shared_ptr<TTransport> transport(new TBufferedTransport(socket));
+            std::shared_ptr<TProtocol> protocol(new TBinaryProtocol(transport));
+            SaveClient client(protocol);
+
+            try {
+                transport->open();
+
+                client.save_data("acs_6627", "511a3065", a, b);
+
+                transport->close();
+            } catch (TException& tx) {
+                cout << "ERROR: " << tx.what() << endl;
+            }
         }
         void match () {
             while (users.size() > 1) {
