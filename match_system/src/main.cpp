@@ -6,7 +6,12 @@
 #include <thrift/server/TSimpleServer.h>
 #include <thrift/transport/TServerSocket.h>
 #include <thrift/transport/TBufferTransports.h>
+
+#include <thread>  // 开启多线程的库
 #include <iostream>
+#include <mutex>  // 锁
+#include <condition_variable>  // 条件变量，用来封装锁
+#include <queue>  // 队列
 
 using namespace std;
 using namespace ::apache::thrift;
@@ -15,6 +20,47 @@ using namespace ::apache::thrift::transport;
 using namespace ::apache::thrift::server;
 
 using namespace  ::match_service;
+
+struct Task {
+    User user;
+    string type;
+};
+
+struct MessageQueue {
+  queue<Task> q;
+  mutex m;
+  condition_variable cv;
+}message_queue;
+
+class Poll {
+    public:
+        void save_result(int a, int b) {
+            printf("Match Result : %d %d\n", a, b);
+        }
+        void match () {
+            while (users.size() > 1) {
+                auto a = users[0], b = users[1];
+                users.erase(users.begin());
+                users.erase(users.begin());
+
+                save_result(a.id, b.id);  //
+            }
+        }
+
+        void add(User user) {
+            users.push_back(user);
+        }
+
+        void remove(User user) {
+            for (uint32_t i = 0; i < users.size(); i++)
+                if (users[i].id == user.id) {
+                    users.erase(users.begin() + i);
+                    break;
+                }
+        }
+    private:
+        vector<User> users;
+}pool;
 
 class MatchHandler : virtual public MatchIf {
     public:
@@ -26,6 +72,10 @@ class MatchHandler : virtual public MatchIf {
             // Your implementation goes here
             printf("add_user\n");
 
+            unique_lock<mutex> lck(message_queue.m); // 加锁，防止写入冲突
+            message_queue.q.push({user, "add"});
+            message_queue.cv.notify_all();  // 唤醒队列
+
             return 0;
         }
 
@@ -33,10 +83,33 @@ class MatchHandler : virtual public MatchIf {
             // Your implementation goes here
             printf("remove_user\n");
 
+            unique_lock<mutex> lck(message_queue.m);
+            message_queue.q.push({user, "remove"});
+
             return 0;
         }
 
 };
+
+void consume_task()
+{
+    while (true) {
+        unique_lock<mutex> lck(message_queue.m);
+
+        if (message_queue.q.empty()) {
+            message_queue.cv.wait(lck);  // 如果队列是空的暂时锁住
+        } else {
+            auto task = message_queue.q.front();
+            message_queue.q.pop();
+            lck.unlock();  // 解锁
+
+            if (task.type == "add") pool.add(task.user);
+            else if (task.type == "remove") pool.remove(task.user);
+
+            pool.match();
+        }
+    }
+}
 
 int main(int argc, char **argv) {
     int port = 9090;
@@ -49,6 +122,8 @@ int main(int argc, char **argv) {
     TSimpleServer server(processor, serverTransport, transportFactory, protocolFactory);
 
     cout << "strat Match Server" << endl;
+
+    thread matching_thread(consume_task);
 
     server.serve();
     return 0;
