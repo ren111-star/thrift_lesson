@@ -15,6 +15,7 @@
 #include <mutex>  // 锁
 #include <condition_variable>  // 条件变量，用来封装锁
 #include <queue>  // 队列
+#include <unistd.h>
 
 using namespace std;
 using namespace ::apache::thrift;
@@ -57,11 +58,21 @@ class Poll {
         }
         void match () {
             while (users.size() > 1) {
-                auto a = users[0], b = users[1];
-                users.erase(users.begin());
-                users.erase(users.begin());
+                sort(users.begin(), users.end(), [&] (User& a, User b){
+                    return a.score < b.score;
+                        });
+                bool flag = true;
 
-                save_result(a.id, b.id);  //
+                for (uint32_t i = 1; i < users.size(); i++) {
+                    auto a = users[i - 1], b = users[i];
+                    if (b.score - a.score <= 50) {
+                        users.erase(users.begin() + i - 1, users.begin() + i + 1);
+                        save_result(a.id, b.id);
+                        flag = false;
+                        break;
+                    }
+                }
+                if (flag) break;
             }
         }
 
@@ -115,7 +126,10 @@ void consume_task()
         unique_lock<mutex> lck(message_queue.m);
 
         if (message_queue.q.empty()) {
-            message_queue.cv.wait(lck);  // 如果队列是空的暂时锁住
+            //      message_queue.cv.wait(lck);  // 如果队列是空的暂时锁住
+            lck.unlock();
+            pool.match();  // 直接锁住
+            sleep(1);
         } else {
             auto task = message_queue.q.front();
             message_queue.q.pop();
